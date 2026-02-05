@@ -1,5 +1,6 @@
 import math
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 
 class SpiderWeb:
@@ -30,6 +31,7 @@ class SpiderWeb:
         # Lattice
         self.lattice = None
         self.lattice_base = None
+        self.lattice_deformer = None
 
     def spoke_offset(self, i: int):
         return self.radius * math.cos(((2 * math.pi) / self.spoke_count) * i), \
@@ -73,24 +75,62 @@ class SpiderWeb:
         self.mesh_group = cmds.group(sweep_meshes, name=f"spiderWeb_{self.instance_id}_meshes_grp")
 
     def create_lattice(self):
-        # Create lattice that encompasses the web
         lattice_size = self.radius * 2.2
 
         cmds.select(cmds.listRelatives(self.mesh_group, children=True))
 
-        # Create lattice with divisions matching spoke count
-        ffd = cmds.lattice(divisions=(self.spoke_count, 3, self.spoke_count),
+        ffd = cmds.lattice(divisions=(self.spoke_count*2, self.height*2, self.spoke_count*2),
                            objectCentered=True,
-                           ldivisions=(self.spoke_count, 3, self.spoke_count))
+                           ldivisions=(self.spoke_count*2, self.height*2, self.spoke_count*2))
 
-        self.lattice = ffd[0]
-        self.lattice_base = ffd[1]
+        self.lattice_deformer = ffd[0]
+        self.lattice = ffd[1]
+        self.lattice_base = ffd[2]
 
-        cmds.rename(self.lattice, f"spiderWeb_{self.instance_id}_lattice")
-        cmds.rename(self.lattice_base, f"spiderWeb_{self.instance_id}_latticeBase")
+        self.lattice = cmds.rename(self.lattice, f"spiderWeb_{self.instance_id}_lattice")
+        self.lattice_base = cmds.rename(self.lattice_base, f"spiderWeb_{self.instance_id}_latticeBase")
 
-        # Parent lattice to locator
-        cmds.parent(self.lattice, self.lattice_base, self.root_locator)
+        cmds.setAttr(f"{self.lattice_deformer}.localInfluenceS", 2)
+        cmds.setAttr(f"{self.lattice_deformer}.localInfluenceT", 2)
+        cmds.setAttr(f"{self.lattice_deformer}.localInfluenceU", 12)
+
+        cmds.parent(self.lattice, self.root_locator)
+        cmds.parent(self.lattice_base, self.root_locator)
+
+    def create_clusters(self):
+        s_div, t_div, u_div = cmds.lattice(self.lattice_deformer, q=True, divisions=True)
+
+        for i, spoke_curve in enumerate(self.spoke_curves):
+            close_points = []
+
+            # Create temporary nearestPointOnCurve node
+            npoc = cmds.createNode('nearestPointOnCurve')
+            curve_shape = cmds.listRelatives(spoke_curve, shapes=True)[0]
+            cmds.connectAttr(f"{curve_shape}.worldSpace[0]", f"{npoc}.inputCurve")
+
+            for s in range(s_div):
+                for t in range(t_div):
+                    for u in range(u_div):
+                        pt_name = f"{self.lattice}.pt[{s}][{t}][{u}]"
+                        pt_pos = cmds.xform(pt_name, q=True, ws=True, t=True)
+
+                        cmds.setAttr(f"{npoc}.inPosition", pt_pos[0], pt_pos[1], pt_pos[2])
+                        closest_pos = cmds.getAttr(f"{npoc}.position")[0]
+
+                        pt_vector = om.MVector(pt_pos[0], pt_pos[1], pt_pos[2])
+                        curve_vector = om.MVector(closest_pos[0], closest_pos[1], closest_pos[2])
+                        distance = (pt_vector - curve_vector).length()
+
+                        if distance < self.radius * 0.15:
+                            close_points.append(pt_name)
+
+            cmds.delete(npoc)
+
+            if close_points:
+                cluster = cmds.cluster(close_points,
+                                       name=f"spiderWeb_{self.instance_id}_cluster_{i}")
+                cluster_handle = cmds.rename(cluster[1], f"spiderWeb_{self.instance_id}_clusterHandle_{i}")
+                cmds.parent(cluster_handle, self.root_locator)
 
     def create_web(self):
         self.root_locator = cmds.spaceLocator(name=f"spiderWeb_{self.instance_id}_loc")[0]
@@ -138,6 +178,7 @@ class SpiderWeb:
 
         self.create_mesh()
         self.create_lattice()
+        self.create_clusters()
 
     def remove_web(self):
         if self.mesh_group and cmds.objExists(self.mesh_group):
