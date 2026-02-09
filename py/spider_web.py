@@ -9,7 +9,6 @@ class SpiderWeb:
     def __init__(self, radius: float = 3.0, height: float = 0.5,
                  spoke_count: int = 8, rib_count: int = 3, web_thickness: float = 0.05,
                  web_curvature: float = 1.0, mesh_detail: int = 8):
-        # Data
         self.radius = radius
         self.height = height
         self.spoke_count = spoke_count
@@ -21,17 +20,13 @@ class SpiderWeb:
         SpiderWeb._instance_count += 1
         self.instance_id = SpiderWeb._instance_count
 
-        # Objects
         self.spoke_curves = []
         self.rib_curves = []
         self.root_locator = None
         self.curve_group = None
         self.mesh_group = None
-
-        # Lattice
-        self.lattice = None
-        self.lattice_base = None
-        self.lattice_deformer = None
+        self.circle_controller = None
+        self.wire_deformer = None
 
     def spoke_offset(self, i: int):
         return self.radius * math.cos(((2 * math.pi) / self.spoke_count) * i), \
@@ -74,63 +69,30 @@ class SpiderWeb:
         sweep_meshes = cmds.ls("sweep*")
         self.mesh_group = cmds.group(sweep_meshes, name=f"spiderWeb_{self.instance_id}_meshes_grp")
 
-    def create_lattice(self):
-        lattice_size = self.radius * 2.2
+    def create_wire_deformer(self):
+        self.circle_controller = cmds.circle(
+            name=f"spiderWeb_{self.instance_id}_controller",
+            center=(0, 0, 0),
+            normal=(0, 1, 0),
+            radius=self.radius,
+            sections=self.spoke_count,
+            degree=1
+        )[0]
 
-        cmds.select(cmds.listRelatives(self.mesh_group, children=True))
+        cmds.parent(self.circle_controller, self.root_locator)
 
-        ffd = cmds.lattice(divisions=(self.spoke_count*2, self.height*2, self.spoke_count*2),
-                           objectCentered=True,
-                           ldivisions=(self.spoke_count*2, self.height*2, self.spoke_count*2))
+        cmds.select(self.spoke_curves)
+        cmds.select(self.circle_controller, add=True)
 
-        self.lattice_deformer = ffd[0]
-        self.lattice = ffd[1]
-        self.lattice_base = ffd[2]
+        wire_result = cmds.wire(
+            self.spoke_curves,
+            wire=self.circle_controller,
+            dropoffDistance=(0, 1),
+            name=f"spiderWeb_{self.instance_id}_wire"
+        )
+        self.wire_deformer = wire_result[0]
 
-        self.lattice = cmds.rename(self.lattice, f"spiderWeb_{self.instance_id}_lattice")
-        self.lattice_base = cmds.rename(self.lattice_base, f"spiderWeb_{self.instance_id}_latticeBase")
-
-        cmds.setAttr(f"{self.lattice_deformer}.localInfluenceS", 2)
-        cmds.setAttr(f"{self.lattice_deformer}.localInfluenceT", 2)
-        cmds.setAttr(f"{self.lattice_deformer}.localInfluenceU", 12)
-
-        cmds.parent(self.lattice, self.root_locator)
-        cmds.parent(self.lattice_base, self.root_locator)
-
-    def create_clusters(self):
-        s_div, t_div, u_div = cmds.lattice(self.lattice_deformer, q=True, divisions=True)
-
-        for i, spoke_curve in enumerate(self.spoke_curves):
-            close_points = []
-
-            # Create temporary nearestPointOnCurve node
-            npoc = cmds.createNode('nearestPointOnCurve')
-            curve_shape = cmds.listRelatives(spoke_curve, shapes=True)[0]
-            cmds.connectAttr(f"{curve_shape}.worldSpace[0]", f"{npoc}.inputCurve")
-
-            for s in range(s_div):
-                for t in range(t_div):
-                    for u in range(u_div):
-                        pt_name = f"{self.lattice}.pt[{s}][{t}][{u}]"
-                        pt_pos = cmds.xform(pt_name, q=True, ws=True, t=True)
-
-                        cmds.setAttr(f"{npoc}.inPosition", pt_pos[0], pt_pos[1], pt_pos[2])
-                        closest_pos = cmds.getAttr(f"{npoc}.position")[0]
-
-                        pt_vector = om.MVector(pt_pos[0], pt_pos[1], pt_pos[2])
-                        curve_vector = om.MVector(closest_pos[0], closest_pos[1], closest_pos[2])
-                        distance = (pt_vector - curve_vector).length()
-
-                        if distance < self.radius * 0.15:
-                            close_points.append(pt_name)
-
-            cmds.delete(npoc)
-
-            if close_points:
-                cluster = cmds.cluster(close_points,
-                                       name=f"spiderWeb_{self.instance_id}_cluster_{i}")
-                cluster_handle = cmds.rename(cluster[1], f"spiderWeb_{self.instance_id}_clusterHandle_{i}")
-                cmds.parent(cluster_handle, self.root_locator)
+        cmds.setAttr(f"{self.wire_deformer}.localInfluence", 0)
 
     def create_web(self):
         self.root_locator = cmds.spaceLocator(name=f"spiderWeb_{self.instance_id}_loc")[0]
@@ -154,31 +116,47 @@ class SpiderWeb:
             cmds.parent(curve, self.curve_group)
 
         for j in range(1, self.rib_count + 1):
-            for i in range(1, self.spoke_count + 1):
-                start_point = self.rib_offset(i, j)
-                end_point = self.rib_offset(i + 1 if i < self.spoke_count else 1, j)
+            rib_parameter = j / self.rib_count
 
+            for i in range(1, self.spoke_count + 1):
+                next_spoke = (i % self.spoke_count) + 1
+                spoke_curve_1 = self.spoke_curves[i - 1]
+                spoke_curve_2 = self.spoke_curves[next_spoke - 1]
+
+                start_point = self.rib_offset(i, j)
+                end_point = self.rib_offset(next_spoke, j)
                 center = (0, self.height, 0)
                 straight_mid = (
                     (start_point[0] + end_point[0]) / 2,
                     (start_point[1] + end_point[1]) / 2,
                     (start_point[2] + end_point[2]) / 2
                 )
-
                 mid_point = (
                     straight_mid[0] * (1 - self.web_curvature) + center[0] * self.web_curvature,
                     straight_mid[1] * (1 - self.web_curvature) + center[1] * self.web_curvature,
                     straight_mid[2] * (1 - self.web_curvature) + center[2] * self.web_curvature
                 )
 
-                curve = cmds.curve(d=2, p=[start_point, mid_point, end_point],
-                                   name=f"rib_{self.instance_id}_{j}_seg_{i}")
-                self.rib_curves.append(curve)
-                cmds.parent(curve, self.curve_group)
+                rib_curve = cmds.curve(d=2, p=[start_point, mid_point, end_point],
+                                       name=f"rib_{self.instance_id}_{j}_seg_{i}")
+                self.rib_curves.append(rib_curve)
+                cmds.parent(rib_curve, self.curve_group)
+                cmds.setAttr(f"{rib_curve}.inheritsTransform", 0)
 
-        self.create_mesh()
-        self.create_lattice()
-        self.create_clusters()
+                poci_start = cmds.createNode('pointOnCurveInfo', name=f"poci_rib_{self.instance_id}_{j}_{i}_start")
+                cmds.connectAttr(f"{spoke_curve_1}.worldSpace[0]", f"{poci_start}.inputCurve")
+                cmds.setAttr(f"{poci_start}.parameter", rib_parameter)
+                cmds.connectAttr(f"{poci_start}.position", f"{rib_curve}.controlPoints[0]")
+
+                poci_end = cmds.createNode('pointOnCurveInfo', name=f"poci_rib_{self.instance_id}_{j}_{i}_end")
+                cmds.connectAttr(f"{spoke_curve_2}.worldSpace[0]", f"{poci_end}.inputCurve")
+                cmds.setAttr(f"{poci_end}.parameter", rib_parameter)
+                cmds.connectAttr(f"{poci_end}.position", f"{rib_curve}.controlPoints[2]")
+
+        self.create_wire_deformer()
+        # self.create_mesh()
+        # self.create_lattice()
+        # self.create_clusters()
 
     def remove_web(self):
         if self.mesh_group and cmds.objExists(self.mesh_group):
@@ -208,7 +186,6 @@ def fetch_selected_web():
     web.spoke_curves = [c for c in cmds.listRelatives(web.curve_group, children=True) if "spoke" in c]
     web.rib_curves = [c for c in cmds.listRelatives(web.curve_group, children=True) if "rib" in c]
 
-    # Find the mesh group
     loc_name = loc.split("_loc")[0]
     potential_mesh_group = f"{loc_name}_meshes_grp"
     if cmds.objExists(potential_mesh_group):
