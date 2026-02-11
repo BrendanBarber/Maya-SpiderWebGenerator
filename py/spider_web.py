@@ -109,6 +109,10 @@ class SpiderWeb:
         self.curve_group = cmds.group(empty=True, name=f"spiderWeb_{self.instance_id}_curves_grp")
         cmds.parent(self.curve_group, self.root_locator)
 
+        center_loc = cmds.spaceLocator(name=f"spiderWeb_{self.instance_id}_center_loc")[0]
+        cmds.parent(center_loc, self.root_locator)
+        cmds.setAttr(f"{center_loc}.translateY", self.height)
+
         for i in range(1, self.spoke_count + 1):
             curve = cmds.curve(d=2, p=[[0, self.height, 0], self.spoke_curve_offset(i), self.spoke_offset(i)],
                                name=f"spoke_{self.instance_id}_{i}")
@@ -153,10 +157,19 @@ class SpiderWeb:
                 cmds.setAttr(f"{poci_end}.parameter", rib_parameter)
                 cmds.connectAttr(f"{poci_end}.position", f"{rib_curve}.controlPoints[2]")
 
+                blend = cmds.createNode('blendColors', name=f"blend_rib_{self.instance_id}_{j}_{i}_mid")
+                cmds.setAttr(f"{blend}.blender", self.web_curvature)
+
+                avg = cmds.createNode('plusMinusAverage', name=f"avg_rib_{self.instance_id}_{j}_{i}")
+                cmds.setAttr(f"{avg}.operation", 3)
+                cmds.connectAttr(f"{poci_start}.position", f"{avg}.input3D[0]")
+                cmds.connectAttr(f"{poci_end}.position", f"{avg}.input3D[1]")
+
+                cmds.connectAttr(f"{avg}.output3D", f"{blend}.color2")
+                cmds.connectAttr(f"{center_loc}.worldPosition[0]", f"{blend}.color1")
+                cmds.connectAttr(f"{blend}.output", f"{rib_curve}.controlPoints[1]")
+
         self.create_wire_deformer()
-        # self.create_mesh()
-        # self.create_lattice()
-        # self.create_clusters()
 
     def remove_web(self):
         if self.mesh_group and cmds.objExists(self.mesh_group):
