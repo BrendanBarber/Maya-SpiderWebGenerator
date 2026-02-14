@@ -112,6 +112,9 @@ class SpiderWeb:
         center_loc = cmds.spaceLocator(name=f"spiderWeb_{self.instance_id}_center_loc")[0]
         cmds.parent(center_loc, self.root_locator)
         cmds.setAttr(f"{center_loc}.translateY", self.height)
+        cmds.setAttr(f"{center_loc}.visibility", 0)
+        cmds.setAttr(f"{center_loc}.overrideEnabled", 1)
+        cmds.setAttr(f"{center_loc}.overrideDisplayType", 2)
 
         for i in range(1, self.spoke_count + 1):
             curve = cmds.curve(d=2, p=[[0, self.height, 0], self.spoke_curve_offset(i), self.spoke_offset(i)],
@@ -207,10 +210,11 @@ def fetch_selected_web():
     return web
 
 
-if (sel_web := fetch_selected_web()) is None:
-    sel_web = SpiderWeb(radius=5.0, height=1.0,
-                        spoke_count=12, rib_count=5, web_thickness=0.05,
-                        web_curvature=0.75, mesh_detail=16)
-    sel_web.create_web()
-else:
-    sel_web.remove_web()
+if __name__ == "__main__":
+    if (sel_web := fetch_selected_web()) is None:
+        sel_web = SpiderWeb(radius=5.0, height=1.0,
+                            spoke_count=12, rib_count=5, web_thickness=0.05,
+                            web_curvature=0.75, mesh_detail=16)
+        sel_web.create_web()
+    else:
+        sel_web.remove_web()
