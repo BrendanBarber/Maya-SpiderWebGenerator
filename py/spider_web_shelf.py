@@ -1,9 +1,8 @@
 """
-Spider Web Shelf Button Installer for Maya.
+Spider Web Generator Installer
 
 Usage: Run this script in Maya's Script Editor to add a 'SpiderWeb'
-button to the Custom shelf. All code is embedded directly into the
-button -- no external file references are needed after installation.
+button to the Custom shelf.
 """
 import maya.cmds as cmds
 import maya.mel as mel
@@ -12,10 +11,7 @@ import maya.mel as mel
 SHELF_NAME = "Custom"
 BUTTON_LABEL = "SpiderWeb"
 
-# The full embedded command that gets baked into the shelf button.
-# Contains the SpiderWeb class, the option box UI, and all callbacks.
-# Callbacks are stored in a persistent module-level dict so they survive
-# after the initial exec() finishes and can be invoked by Maya's UI.
+# The full embedded command gets baked into the shelf button.
 SHELF_COMMAND = r'''
 import math
 import types
@@ -182,7 +178,7 @@ _mod.SpiderWeb = SpiderWeb
 
 
 # ------------------------------------------------------------------ #
-#  Option Box UI Callbacks
+#  Option Box UI
 # ------------------------------------------------------------------ #
 WINDOW_NAME = "spiderWebOptionBox"
 _mod.WINDOW_NAME = WINDOW_NAME
@@ -256,7 +252,7 @@ _mod.close_window = _close_window
 
 
 # ------------------------------------------------------------------ #
-#  Build and show the option box
+#  Create and show the option box
 # ------------------------------------------------------------------ #
 if cmds.window(WINDOW_NAME, exists=True):
     cmds.deleteUI(WINDOW_NAME)
@@ -266,7 +262,7 @@ cmds.window(WINDOW_NAME, title="Spider Web Options",
 
 cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
 
-# -- Web Parameters --
+# Web Parameters
 cmds.frameLayout(label="Web Parameters", collapsable=True,
                  borderStyle="etchedIn", marginWidth=8, marginHeight=8)
 cmds.columnLayout(adjustableColumn=True, rowSpacing=2)
@@ -295,7 +291,7 @@ cmds.setParent("..")
 
 cmds.separator(style="in", height=8)
 
-# -- Transform --
+# Transform
 cmds.frameLayout(label="Transform", collapsable=True,
                  borderStyle="etchedIn", marginWidth=8, marginHeight=8)
 cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
@@ -322,7 +318,7 @@ cmds.setParent("..")
 
 cmds.separator(style="in", height=8)
 
-# -- Action Buttons --
+# Action Buttons
 cmds.rowLayout(numberOfColumns=2, columnWidth2=(185, 185),
                columnAlign2=("center", "center"))
 cmds.button(label="Create",
@@ -338,13 +334,13 @@ cmds.showWindow(WINDOW_NAME)
 
 
 def install_shelf_button():
-    """Add a SpiderWeb button to Maya's Custom shelf with all code embedded."""
+    """Add a SpiderWeb button to Maya's Custom shelf"""
     shelf_top = mel.eval('$tmpVar=$gShelfTopLevel')
 
     if not cmds.shelfLayout(SHELF_NAME, exists=True):
         cmds.shelfLayout(SHELF_NAME, parent=shelf_top)
 
-    # Remove existing button to allow idempotent re-install
+    # Remove existing button to allow re-install
     existing = cmds.shelfLayout(SHELF_NAME, query=True, childArray=True) or []
     for child in existing:
         if cmds.shelfButton(child, exists=True):
