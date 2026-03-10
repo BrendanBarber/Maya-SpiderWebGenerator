@@ -132,7 +132,7 @@ class SpiderWeb:
 
                 start_point = self.rib_offset(i, j)
                 end_point = self.rib_offset(next_spoke, j)
-                center = (0, self.height, 0)
+                center = self.spoke_point_at(i, (j - 1) / self.rib_count)
                 straight_mid = (
                     (start_point[0] + end_point[0]) / 2,
                     (start_point[1] + end_point[1]) / 2,

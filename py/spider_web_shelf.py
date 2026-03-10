@@ -1,8 +1,5 @@
 """
 Spider Web Generator Installer
-
-Usage: Run this script in Maya's Script Editor to add a 'SpiderWeb'
-button to the Custom shelf.
 """
 import maya.cmds as cmds
 import maya.mel as mel
@@ -11,25 +8,18 @@ import maya.mel as mel
 SHELF_NAME = "Custom"
 BUTTON_LABEL = "SpiderWeb"
 
-# The full embedded command gets baked into the shelf button.
 SHELF_COMMAND = r'''
 import math
 import types
 import sys
 import maya.cmds as cmds
 
-# ------------------------------------------------------------------ #
-#  Persistent namespace -- survives after exec() by living as a module
-# ------------------------------------------------------------------ #
 _MODULE_NAME = "_spiderWebShelf"
 if _MODULE_NAME not in sys.modules:
     sys.modules[_MODULE_NAME] = types.ModuleType(_MODULE_NAME)
 _mod = sys.modules[_MODULE_NAME]
 
 
-# ------------------------------------------------------------------ #
-#  SpiderWeb class
-# ------------------------------------------------------------------ #
 class SpiderWeb:
     _instance_count = 0
 
@@ -132,7 +122,7 @@ class SpiderWeb:
 
                 start_point = self.rib_offset(i, j)
                 end_point = self.rib_offset(next_spoke, j)
-                center = (0, self.height, 0)
+                center = self.spoke_point_at(i, (j - 1) / self.rib_count)
                 straight_mid = (
                     (start_point[0] + end_point[0]) / 2,
                     (start_point[1] + end_point[1]) / 2,
@@ -178,17 +168,146 @@ _mod.SpiderWeb = SpiderWeb
 
 
 # ------------------------------------------------------------------ #
-#  Option Box UI
+#  Mesh helpers
 # ------------------------------------------------------------------ #
-WINDOW_NAME = "spiderWebOptionBox"
-_mod.WINDOW_NAME = WINDOW_NAME
 
+def _find_web_root(node):
+    """Walk up the hierarchy to find the spiderWeb_*_loc root transform."""
+    current = node
+    for _ in range(12):
+        if not current or not cmds.objExists(current):
+            break
+        # If we landed on a shape, step to its transform first
+        if cmds.objectType(current, isAType="shape"):
+            parents = cmds.listRelatives(current, parent=True, fullPath=True)
+            if not parents:
+                break
+            current = parents[0]
+        short = current.split("|")[-1]
+        if short.startswith("spiderWeb_") and short.endswith("_loc"):
+            return short
+        parents = cmds.listRelatives(current, parent=True, fullPath=True)
+        if not parents:
+            break
+        current = parents[0]
+    return None
+
+
+def _get_selected_web_root():
+    sel = cmds.ls(selection=True, long=True)
+    if not sel:
+        cmds.warning("Nothing selected. Select any part of a spider web.")
+        return None
+    root = _find_web_root(sel[0])
+    if not root:
+        cmds.warning("Could not find a spider web root locator in the selection hierarchy.")
+    return root
+
+
+def _get_mesh_group(root_loc):
+    name = root_loc.replace("_loc", "_mesh_grp")
+    return name if cmds.objExists(name) else None
+
+
+def _remove_mesh_from_root(root_loc):
+    mesh_grp = _get_mesh_group(root_loc)
+    if mesh_grp and cmds.objExists(mesh_grp):
+        cmds.delete(mesh_grp)
+        return True
+    return False
+
+
+def _generate_mesh(root_loc, tube_radius, tube_sides, curve_divisions):
+    """Delete any existing mesh, then sweep all curves under *_curves_grp."""
+    _remove_mesh_from_root(root_loc)
+
+    curves_grp = root_loc.replace("_loc", "_curves_grp")
+    if not cmds.objExists(curves_grp):
+        cmds.warning(f"Curve group not found: {curves_grp}")
+        return
+
+    all_children = cmds.listRelatives(curves_grp, allDescendents=True, fullPath=True, type="nurbsCurve") or []
+    curves = list({cmds.listRelatives(s, parent=True, fullPath=True)[0] for s in all_children})
+    if not curves:
+        cmds.warning("No curves found under the web's curve group.")
+        return
+
+    mesh_grp = cmds.group(empty=True, name=root_loc.replace("_loc", "_mesh_grp"))
+    cmds.parent(mesh_grp, root_loc)
+
+    before_meshes = set(cmds.ls(type="mesh") or [])
+    before = set(cmds.ls(type="sweepMeshCreator") or [])
+
+    cmds.select(curves, replace=True)
+    cmds.sweepMeshFromCurve(oneNodePerCurve=False)
+
+    new_sweep_nodes = set(cmds.ls(type="sweepMeshCreator") or []) - before
+
+    for sweep_node in new_sweep_nodes:
+        cmds.setAttr(f"{sweep_node}.scaleProfileX",         tube_radius)
+        cmds.setAttr(f"{sweep_node}.profilePolySides",       tube_sides)
+        cmds.setAttr(f"{sweep_node}.interpolationPrecision", curve_divisions)
+        cmds.setAttr(f"{sweep_node}.capsEnable",             1)
+        cmds.setAttr(f"{sweep_node}.interpolationOptimize",  1)
+
+    new_mesh_shapes = set(cmds.ls(type="mesh") or []) - before_meshes
+    new_meshes = []
+    for shape in new_mesh_shapes:
+        xform = cmds.listRelatives(shape, parent=True, fullPath=True)
+        if xform:
+            new_meshes.append(xform[0])
+
+    if new_meshes:
+        cmds.parent(new_meshes, mesh_grp)
+
+    cmds.select(root_loc)
+    print(f"Generated mesh for {root_loc} ({len(curves)} curves)")
+
+
+_mod.find_web_root = _find_web_root
+_mod.get_selected_web_root = _get_selected_web_root
+_mod.generate_mesh = _generate_mesh
+_mod.remove_mesh_from_root = _remove_mesh_from_root
+
+
+# ------------------------------------------------------------------ #
+#  Mesh UI callbacks
+# ------------------------------------------------------------------ #
+
+def _on_generate_mesh(*args):
+    root = _mod.get_selected_web_root()
+    if not root:
+        return
+    tube_radius = cmds.floatSliderGrp("swOB_tubeRadius", query=True, value=True)
+    tube_sides  = cmds.intSliderGrp("swOB_tubeSides",   query=True, value=True)
+    curve_divs  = cmds.floatSliderGrp("swOB_curveDivs",  query=True, value=True)
+    _mod.generate_mesh(root, tube_radius, tube_sides, curve_divs)
+
+_mod.on_generate_mesh = _on_generate_mesh
+
+
+def _on_remove_mesh(*args):
+    root = _mod.get_selected_web_root()
+    if not root:
+        return
+    removed = _mod.remove_mesh_from_root(root)
+    if removed:
+        print(f"Removed mesh from {root}")
+    else:
+        cmds.warning(f"No mesh group found for {root}")
+
+_mod.on_remove_mesh = _on_remove_mesh
+
+
+# ------------------------------------------------------------------ #
+#  Option Box UI callbacks
+# ------------------------------------------------------------------ #
 
 def _toggle_transform_fields(*args):
     enabled = cmds.checkBoxGrp("swOB_moveEnabled", query=True, value1=True)
     cmds.floatFieldGrp("swOB_translate", edit=True, enable=enabled)
-    cmds.floatFieldGrp("swOB_rotate", edit=True, enable=enabled)
-    cmds.button("swOB_getFromSel", edit=True, enable=enabled)
+    cmds.floatFieldGrp("swOB_rotate",    edit=True, enable=enabled)
+    cmds.button("swOB_getFromSel",       edit=True, enable=enabled)
 
 _mod.toggle_transform_fields = _toggle_transform_fields
 
@@ -201,10 +320,8 @@ def _get_from_selection(*args):
     obj = sel[0]
     t = cmds.xform(obj, query=True, worldSpace=True, translation=True)
     r = cmds.xform(obj, query=True, worldSpace=True, rotation=True)
-    cmds.floatFieldGrp("swOB_translate", edit=True,
-                        value1=t[0], value2=t[1], value3=t[2])
-    cmds.floatFieldGrp("swOB_rotate", edit=True,
-                        value1=r[0], value2=r[1], value3=r[2])
+    cmds.floatFieldGrp("swOB_translate", edit=True, value1=t[0], value2=t[1], value3=t[2])
+    cmds.floatFieldGrp("swOB_rotate",    edit=True, value1=r[0], value2=r[1], value3=r[2])
     cmds.checkBoxGrp("swOB_moveEnabled", edit=True, value1=True)
     _mod.toggle_transform_fields()
 
@@ -213,17 +330,19 @@ _mod.get_from_selection = _get_from_selection
 
 def _create_web(*args):
     SW = _mod.SpiderWeb
-    radius = cmds.floatSliderGrp("swOB_radius", query=True, value=True)
-    height = cmds.floatSliderGrp("swOB_height", query=True, value=True)
-    spokes = cmds.intSliderGrp("swOB_spokes", query=True, value=True)
-    ribs = cmds.intSliderGrp("swOB_ribs", query=True, value=True)
-    thickness = cmds.floatSliderGrp("swOB_thickness", query=True, value=True)
+    radius    = cmds.floatSliderGrp("swOB_radius",    query=True, value=True)
+    height    = cmds.floatSliderGrp("swOB_height",    query=True, value=True)
+    spokes    = cmds.intSliderGrp("swOB_spokes",      query=True, value=True)
+    ribs      = cmds.intSliderGrp("swOB_ribs",        query=True, value=True)
     curvature = cmds.floatSliderGrp("swOB_curvature", query=True, value=True)
+
+    # tube_radius is now owned by the Mesh section but used as web_thickness for the class
+    tube_radius = cmds.floatSliderGrp("swOB_tubeRadius", query=True, value=True)
 
     web = SW(
         radius=radius, height=height,
         spoke_count=spokes, rib_count=ribs,
-        web_thickness=thickness, web_curvature=curvature,
+        web_thickness=tube_radius, web_curvature=curvature,
     )
     web.create_web()
 
@@ -237,6 +356,12 @@ def _create_web(*args):
         rz = cmds.floatFieldGrp("swOB_rotate", query=True, value3=True)
         cmds.xform(web.root_locator, worldSpace=True, translation=(tx, ty, tz))
         cmds.xform(web.root_locator, worldSpace=True, rotation=(rx, ry, rz))
+
+    auto_mesh = cmds.checkBoxGrp("swOB_autoMesh", query=True, value1=True)
+    if auto_mesh:
+        tube_sides = cmds.intSliderGrp("swOB_tubeSides", query=True, value=True)
+        curve_divs = cmds.floatSliderGrp("swOB_curveDivs", query=True, value=True)
+        _mod.generate_mesh(web.root_locator, tube_radius, tube_sides, curve_divs)
 
     cmds.select(web.root_locator)
     print("Created spider web: {}".format(web.root_locator))
@@ -252,46 +377,69 @@ _mod.close_window = _close_window
 
 
 # ------------------------------------------------------------------ #
-#  Create and show the option box
+#  Build UI
 # ------------------------------------------------------------------ #
+WINDOW_NAME = "spiderWebOptionBox"
+_mod.WINDOW_NAME = WINDOW_NAME
+
 if cmds.window(WINDOW_NAME, exists=True):
     cmds.deleteUI(WINDOW_NAME)
 
 cmds.window(WINDOW_NAME, title="Spider Web Options",
-            widthHeight=(380, 420), sizeable=True)
+            widthHeight=(380, 560), sizeable=True)
 
 cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
 
-# Web Parameters
+# -- Web Parameters --
 cmds.frameLayout(label="Web Parameters", collapsable=True,
                  borderStyle="etchedIn", marginWidth=8, marginHeight=8)
 cmds.columnLayout(adjustableColumn=True, rowSpacing=2)
 
-cmds.floatSliderGrp("swOB_radius", label="Radius", field=True,
-                     minValue=0.1, maxValue=20.0, value=3.0,
-                     columnWidth3=(80, 60, 200))
-cmds.floatSliderGrp("swOB_height", label="Height", field=True,
-                     minValue=0.0, maxValue=10.0, value=0.5,
-                     columnWidth3=(80, 60, 200))
-cmds.intSliderGrp("swOB_spokes", label="Spokes", field=True,
-                   minValue=3, maxValue=32, value=8,
-                   columnWidth3=(80, 60, 200))
-cmds.intSliderGrp("swOB_ribs", label="Ribs", field=True,
-                   minValue=1, maxValue=20, value=3,
-                   columnWidth3=(80, 60, 200))
-cmds.floatSliderGrp("swOB_thickness", label="Thickness", field=True,
-                     minValue=0.005, maxValue=0.5, value=0.05,
-                     columnWidth3=(80, 60, 200))
-cmds.floatSliderGrp("swOB_curvature", label="Curvature", field=True,
-                     minValue=0.0, maxValue=1.0, value=1.0,
-                     columnWidth3=(80, 60, 200))
+cmds.floatSliderGrp("swOB_radius",    label="Radius",    field=True, minValue=0.1,  maxValue=20.0, value=3.0,  columnWidth3=(80, 60, 200))
+cmds.floatSliderGrp("swOB_height",    label="Height",    field=True, minValue=0.0,  maxValue=10.0, value=0.5,  columnWidth3=(80, 60, 200))
+cmds.intSliderGrp("swOB_spokes",      label="Spokes",    field=True, minValue=3,    maxValue=32,   value=8,    columnWidth3=(80, 60, 200))
+cmds.intSliderGrp("swOB_ribs",        label="Ribs",      field=True, minValue=1,    maxValue=20,   value=3,    columnWidth3=(80, 60, 200))
+cmds.floatSliderGrp("swOB_curvature", label="Curvature", field=True, minValue=0.0,  maxValue=1.0,  value=1.0,  columnWidth3=(80, 60, 200))
 
 cmds.setParent("..")
 cmds.setParent("..")
 
 cmds.separator(style="in", height=8)
 
-# Transform
+# -- Mesh --
+cmds.frameLayout(label="Mesh", collapsable=True,
+                 borderStyle="etchedIn", marginWidth=8, marginHeight=8)
+cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
+
+cmds.floatSliderGrp("swOB_tubeRadius", label="Tube Radius", field=True, minValue=0.01, maxValue=0.5, value=0.05, step=0.01, columnWidth3=(80, 60, 200))
+cmds.intSliderGrp("swOB_tubeSides",    label="Tube Sides",  field=True, minValue=3,     maxValue=16,  value=6,    columnWidth3=(80, 60, 200))
+cmds.floatSliderGrp("swOB_curveDivs", label="Precision",   field=True, minValue=0.0,   maxValue=100.0, value=80.0, columnWidth3=(80, 60, 200))
+
+cmds.separator(style="in", height=6)
+
+cmds.checkBoxGrp("swOB_autoMesh", label="", label1="Generate mesh on Create", value1=False)
+
+cmds.separator(style="none", height=2)
+
+cmds.rowLayout(numberOfColumns=2, columnWidth2=(185, 185),
+               columnAlign2=("center", "center"))
+cmds.button(label="Generate / Re-generate",
+            command="import sys; sys.modules['_spiderWebShelf'].on_generate_mesh()",
+            width=180, backgroundColor=(0.25, 0.4, 0.55))
+cmds.button(label="Remove Mesh",
+            command="import sys; sys.modules['_spiderWebShelf'].on_remove_mesh()",
+            width=180, backgroundColor=(0.5, 0.25, 0.25))
+cmds.setParent("..")
+
+cmds.text(label="Select any part of a web before generating.", align="center",
+          font="smallPlainLabelFont")
+
+cmds.setParent("..")
+cmds.setParent("..")
+
+cmds.separator(style="in", height=8)
+
+# -- Transform --
 cmds.frameLayout(label="Transform", collapsable=True,
                  borderStyle="etchedIn", marginWidth=8, marginHeight=8)
 cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
@@ -300,12 +448,10 @@ cmds.checkBoxGrp("swOB_moveEnabled", label="",
                   label1="Move After Creation", value1=False,
                   changeCommand="import sys; sys.modules['_spiderWebShelf'].toggle_transform_fields()")
 
-cmds.floatFieldGrp("swOB_translate", label="Translate",
-                    numberOfFields=3,
+cmds.floatFieldGrp("swOB_translate", label="Translate", numberOfFields=3,
                     value1=0.0, value2=0.0, value3=0.0,
                     enable=False, columnWidth4=(80, 80, 80, 80))
-cmds.floatFieldGrp("swOB_rotate", label="Rotate",
-                    numberOfFields=3,
+cmds.floatFieldGrp("swOB_rotate",    label="Rotate",    numberOfFields=3,
                     value1=0.0, value2=0.0, value3=0.0,
                     enable=False, columnWidth4=(80, 80, 80, 80))
 
@@ -318,7 +464,7 @@ cmds.setParent("..")
 
 cmds.separator(style="in", height=8)
 
-# Action Buttons
+# -- Action buttons --
 cmds.rowLayout(numberOfColumns=2, columnWidth2=(185, 185),
                columnAlign2=("center", "center"))
 cmds.button(label="Create",
@@ -334,13 +480,11 @@ cmds.showWindow(WINDOW_NAME)
 
 
 def install_shelf_button():
-    """Add a SpiderWeb button to Maya's Custom shelf"""
     shelf_top = mel.eval('$tmpVar=$gShelfTopLevel')
 
     if not cmds.shelfLayout(SHELF_NAME, exists=True):
         cmds.shelfLayout(SHELF_NAME, parent=shelf_top)
 
-    # Remove existing button to allow re-install
     existing = cmds.shelfLayout(SHELF_NAME, query=True, childArray=True) or []
     for child in existing:
         if cmds.shelfButton(child, exists=True):
